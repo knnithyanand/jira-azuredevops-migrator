@@ -1,11 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-
+using System.Text;
 using Common.Config;
 
 using Migration.Common;
-using Migration.Common.Config;
 using Migration.Common.Log;
 using Migration.WIContract;
 
@@ -134,6 +133,39 @@ namespace JiraExport
                 if (type != null)
                 {
                     var revisions = issue.Revisions.Select(r => MapRevision(r)).ToList();
+
+                    // TODO: Add revision for snapshot fields
+                    const string pfPrefix = "Preserve.";
+
+                    var pfContent = new StringBuilder();
+                    pfContent.AppendLine($"<h3>Migration Preserved Fields</h3>");
+                    pfContent.AppendLine($"<table><tr><th>Field</th><th>Value</th></tr>");
+                    var hasPreserveFields = false;
+
+                    foreach (var r in revisions)
+                    {
+                        var preserveFields = from f in r.Fields
+                                           where f.ReferenceName.StartsWith(pfPrefix)
+                                           select f;
+                        hasPreserveFields = hasPreserveFields || preserveFields.Count() > 0;
+                        foreach (var pf in preserveFields.ToList())
+                        {
+                            pfContent.AppendLine($"<tr><td>{pf.ReferenceName.Replace(pfPrefix, "")}</td><td>{pf.Value?.ToString().Trim()}</td></tr>");
+                            r.Fields.Remove(pf);
+                        }
+                    }
+                    pfContent.AppendLine($"</table>");
+
+                    if (hasPreserveFields)
+                    {
+                        revisions.Add(new WiRevision()
+                        {
+                            ParentOriginId = issue.Key,
+                            Index = revisions.Count,
+                            Author = MapUser("tool@adomigration.cli"),
+                            Fields = new List<WiField>() { new WiField() { ReferenceName = "System.History", Value = pfContent.ToString() } }
+                        });
+                    }
                     wiItem.OriginId = issue.Key;
                     wiItem.Type = type;
                     wiItem.Revisions = revisions;
@@ -306,6 +338,9 @@ namespace JiraExport
                                 break;
                             case "MapRendered":
                                 value = r => MapRenderedValue(r, item.Source, isCustomField);
+                                break;
+                            case "MapPreserved":
+                                value = r => MapPreservedValue(r, item.Source, isCustomField);
                                 break;
                             default:
                                 value = IfChanged<string>(item.Source, isCustomField);
@@ -484,6 +519,40 @@ namespace JiraExport
                 }
                 value = CorrectRenderedHtmlvalue(value, r);
 
+                return (true, value);
+            }
+            else
+            {
+                return (false, null);
+            }
+        }
+
+        private (bool, object) MapPreservedValue(JiraRevision r, string sourceField, bool isCustomField)
+        {
+            if (isCustomField)
+            {
+                var customFieldName = _jiraProvider.GetCustomId(sourceField);
+                sourceField = customFieldName;
+            }
+
+            var targetWit = (from t in _config.TypeMap.Types where t.Source == r.Type select t.Target).FirstOrDefault();
+
+            if (r.Fields.TryGetValue(sourceField, out object value))
+            {
+                foreach (var item in _config.FieldMap.Fields)
+                {
+                    if (((item.Source == sourceField && (item.For.Contains(targetWit) || item.For == "All")) ||
+                          item.Source == sourceField && (!string.IsNullOrWhiteSpace(item.NotFor) && !item.NotFor.Contains(targetWit))) &&
+                          item.Mapping?.Values != null)
+                    {
+                        var mappedValue = (from s in item.Mapping.Values where s.Source == value.ToString() select s.Target).FirstOrDefault();
+                        if (string.IsNullOrEmpty(mappedValue))
+                        {
+                            Logger.Log(LogLevel.Warning, $"Missing mapping value '{value}' for field '{sourceField}'.");
+                        }
+                        return (true, mappedValue);
+                    }
+                }
                 return (true, value);
             }
             else

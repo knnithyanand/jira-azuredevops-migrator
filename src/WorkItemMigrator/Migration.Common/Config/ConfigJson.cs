@@ -1,6 +1,7 @@
 ﻿using Migration.Common.Config;
 
 using Newtonsoft.Json;
+using System.Collections.Generic;
 
 namespace Common.Config
 {
@@ -63,6 +64,8 @@ namespace Common.Config
         [JsonProperty(PropertyName = "rendered-fields")]
         public string[] RenderedFields { get; set; } = new string[] { "description", "comment" };
 
+        [JsonProperty(PropertyName = "preserve-fields")]
+        public List<string> PreserveFields { get; set; }
 
         [JsonProperty(PropertyName = "using-jira-cloud")]
         public bool UsingJiraCloud { get; set; } = true;

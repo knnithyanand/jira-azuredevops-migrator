@@ -470,13 +470,19 @@ namespace WorkItemImport
             try
             {
                 var field = wi.Fields[fieldRef];
+
                 field.Value = fieldValue;
 
-                Logger.Log(LogLevel.Debug, $"Mapped '{fieldRef}' '{fieldValue}'.");
+                if (field.IsValid)
+                    Logger.Log(LogLevel.Debug, $"Mapped '{fieldRef}' '{fieldValue}'.");
+                else
+                {
+                    field.Value = null;
+                    Logger.Log(LogLevel.Warning, $"Mapped empty value for '{fieldRef}', because value was not valid");
+                }
             }
             catch (ValidationException ex)
             {
-
                 Logger.Log(LogLevel.Error, ex.Message);
             }
 
@@ -622,12 +628,15 @@ namespace WorkItemImport
 
         private bool IsDuplicateWorkItemLink(LinkCollection links, RelatedLink relatedLink)
         {
-            if (links.Contains(relatedLink))
-            {
-                Logger.Log(LogLevel.Warning, $"Duplicate work item link, related workitem id: {relatedLink.RelatedWorkItemId}");
-                return true;
-            }
-            return false;
+            var containsRelatedLink = links.Contains(relatedLink);
+            var hasSameRelatedWorkItemId = links.OfType<RelatedLink>()
+                .Any(l => l.RelatedWorkItemId == relatedLink.RelatedWorkItemId);
+
+            if (!containsRelatedLink && !hasSameRelatedWorkItemId)
+                return false;
+
+            Logger.Log(LogLevel.Warning, $"Duplicate work item link detected to related workitem id: {relatedLink.RelatedWorkItemId}, Skipping link");
+            return true;
 
 
         }
@@ -715,20 +724,28 @@ namespace WorkItemImport
             catch (WorkItemLinkValidationException wilve)
             {
                 Logger.Log(wilve, $"[{wilve.GetType()}] {wilve.Message}. Link Source: {wilve.LinkInfo.SourceId}, Target: {wilve.LinkInfo.TargetId} in {rev} will be skipped.");
-                RemoveLinksFromWiThatExceedsLimit(newWorkItem);
-                SaveWorkItem(rev, newWorkItem);
+                var exceedsLinkLimit = RemoveLinksFromWiThatExceedsLimit(newWorkItem);
+                if (exceedsLinkLimit)
+                    SaveWorkItem(rev, newWorkItem);
             }
         }
 
-        private void RemoveLinksFromWiThatExceedsLimit(WorkItem newWorkItem)
+        private bool RemoveLinksFromWiThatExceedsLimit(WorkItem newWorkItem)
         {
             var links = newWorkItem.Links.OfType<RelatedLink>().ToList();
+            var result = false;
             foreach (var link in links)
             {
-                var relatedLinkCount = GetWorkItem(link.RelatedWorkItemId).RelatedLinkCount;
-                if (relatedLinkCount == 1000)
-                    newWorkItem.Links.Remove(link);
+                var relatedWorkItem = GetWorkItem(link.RelatedWorkItemId);
+                var relatedLinkCount = relatedWorkItem.RelatedLinkCount;
+                if (relatedLinkCount != 1000)
+                    continue;
+
+                newWorkItem.Links.Remove(link);
+                result = true;
             }
+
+            return result;
         }
 
         private void EnsureAuthorFields(WiRevision rev)
